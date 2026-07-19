@@ -1,292 +1,235 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Brain,
-  Camera,
-  Check,
-  Clipboard,
-  Gauge,
-  Leaf,
-  LoaderCircle,
-  RotateCcw,
-  Sparkles,
-  WifiOff
-} from 'lucide-react';
-import { CameraPanel } from './components/CameraPanel.jsx';
-import { FactPanel } from './components/FactPanel.jsx';
-import { PredictionPanel } from './components/PredictionPanel.jsx';
-import { useCamera } from './hooks/useCamera.js';
-import { generateVegetableFact } from './services/funFactService.js';
-import { createVisionModel } from './services/visionModel.js';
-import { PERSONAS } from './utils/personas.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import Header from './components/Header';
+import CameraSection from './components/CameraSection';
+import InfoPanel from './components/InfoPanel';
+import { useAppState } from './hooks/useAppState';
+import { CameraService } from './services/CameraService';
+import { DetectionService } from './services/DetectionService';
+import { RootFactsService } from './services/RootFactsService';
+import { APP_CONFIG, TONE_CONFIG, isValidDetection } from './utils/config';
 
-const DEFAULT_FPS = 3;
-const CONFIDENCE_TRIGGER = 0.55;
+function App() {
+  const { state, actions } = useAppState();
+  const detectionCleanupRef = useRef(null);
+  const isRunningRef = useRef(false);
+  const lastDetectedLabelRef = useRef('');
+  const isGeneratingFactRef = useRef(false);
+  const [currentTone, setCurrentTone] = useState(TONE_CONFIG.defaultTone);
 
-export default function App() {
-  const videoRef = useRef(null);
-  const detectorRef = useRef(null);
-  const frameTimerRef = useRef(null);
-  const lastFactLabelRef = useRef('');
-
-  const [fpsLimit, setFpsLimit] = useState(DEFAULT_FPS);
-  const [persona, setPersona] = useState(PERSONAS[0].id);
-  const [modelStatus, setModelStatus] = useState('Menunggu Model...');
-  const [modelProgress, setModelProgress] = useState(0);
-  const [backend, setBackend] = useState('Mendeteksi backend...');
-  const [prediction, setPrediction] = useState(null);
-  const [isPredicting, setIsPredicting] = useState(false);
-  const [fact, setFact] = useState('');
-  const [factStatus, setFactStatus] = useState('Menunggu sayuran terdeteksi.');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [copyState, setCopyState] = useState('idle');
-
-  const { cameraStatus, cameraError, startCamera, stopCamera } = useCamera(videoRef);
-
-  const selectedPersona = useMemo(
-    () => PERSONAS.find((item) => item.id === persona) ?? PERSONAS[0],
-    [persona]
-  );
-
+  // TODO [Basic] Inisialisasi layanan deteksi, kamera, dan generator fakta saat aplikasi dimuat
   useEffect(() => {
     let isMounted = true;
 
-    async function initVision() {
+    async function initializeServices() {
+      const detector = new DetectionService();
+      const camera = new CameraService();
+      const generator = new RootFactsService();
+
       try {
-        const detector = await createVisionModel((progress) => {
-          if (!isMounted) return;
-          const percent = Math.round(progress * 100);
-          setModelProgress(Math.min(100, Math.max(1, percent)));
-          setModelStatus(`Menunggu Model... ${percent}%`);
+        await Promise.all([
+          detector.loadModel((_percent, status) => {
+            if (isMounted) actions.setModelStatus(status);
+          }),
+          camera.loadCameras(),
+        ]);
+
+        if (!isMounted) return;
+
+        actions.setServices({ detector, camera, generator });
+        actions.setModelStatus('Model AI Siap');
+
+        generator.loadModel().catch((error) => {
+          console.warn('Generator fakta belum siap, fallback akan digunakan.', error);
         });
-
-        if (!isMounted) {
-          detector.dispose();
-          return;
-        }
-
-        detectorRef.current = detector;
-        setBackend(detector.backend);
-        setModelProgress(100);
-        setModelStatus('Model siap mengenali sayuran.');
       } catch (error) {
         console.error(error);
-        setModelStatus('Model gagal dimuat. Periksa console dan berkas model.');
+        actions.setError('Gagal memuat model atau kamera. Periksa izin browser dan koneksi.');
+        actions.setModelStatus('Model AI Gagal');
       }
     }
 
-    initVision();
+    initializeServices();
 
     return () => {
       isMounted = false;
-      detectorRef.current?.dispose();
     };
-  }, []);
+  }, [actions]);
 
-  const requestFact = useCallback(
-    async (label) => {
-      if (!label || lastFactLabelRef.current === `${label}-${persona}` || isGenerating) {
+  // TODO [Basic] Bersihkan sumber daya saat komponen ditinggalkan
+  useEffect(() => () => {
+    window.clearTimeout(detectionCleanupRef.current);
+    state.services.camera?.stopCamera();
+    state.services.detector?.dispose();
+  }, [state.services.camera, state.services.detector]);
+
+  // TODO [Basic] Fungsi untuk memulai loop deteksi
+  const startDetectionLoop = useCallback(() => {
+    const { camera, detector, generator } = state.services;
+
+    const detectFrame = async () => {
+      if (!isRunningRef.current || !camera?.isReady() || !detector?.isLoaded()) {
+        detectionCleanupRef.current = window.setTimeout(detectFrame, APP_CONFIG.detectionRetryInterval);
         return;
       }
 
-      lastFactLabelRef.current = `${label}-${persona}`;
-      setIsGenerating(true);
-      setFactStatus('Si Otak sedang menulis fun fact...');
-      setCopyState('idle');
+      actions.setAppState('analyzing');
 
       try {
-        const text = await generateVegetableFact(label, selectedPersona, (progress) => {
-          if (progress?.status) {
-            setFactStatus(`Menyiapkan Generative AI: ${progress.status}`);
+        const result = await detector.predict(camera.video);
+        actions.setDetectionResult(result);
+
+        if (isValidDetection(result) && !isGeneratingFactRef.current) {
+          const detectionKey = `${result.className}-${currentTone}`;
+          actions.setAppState('result');
+
+          if (lastDetectedLabelRef.current !== detectionKey) {
+            lastDetectedLabelRef.current = detectionKey;
+            isGeneratingFactRef.current = true;
+            actions.setFunFactData(null);
+
+            try {
+              generator?.setTone(currentTone);
+              const fact = await generator?.generateFacts(result.className);
+              actions.setFunFactData(fact);
+            } catch (error) {
+              console.error(error);
+              actions.setFunFactData('error');
+            } finally {
+              isGeneratingFactRef.current = false;
+            }
           }
-        });
-        setFact(text);
-        setFactStatus('Fun fact siap dibaca.');
+        }
       } catch (error) {
         console.error(error);
-        setFactStatus('Fun fact fallback ditampilkan karena model bahasa belum siap.');
-        setFact(
-          `${label} punya cerita menarik: sayuran ini sering dipakai di dapur karena mudah berpadu dengan banyak rasa, warna, dan tekstur.`
-        );
+        actions.setError('Prediksi gagal dijalankan.');
       } finally {
-        setIsGenerating(false);
+        const fps = camera?.config?.fps || APP_CONFIG.fpsLimit;
+        const delay = Math.max(250, Math.round(1000 / fps));
+        if (isRunningRef.current) {
+          detectionCleanupRef.current = window.setTimeout(detectFrame, delay);
+        }
       }
-    },
-    [isGenerating, persona, selectedPersona]
-  );
+    };
 
-  const runPrediction = useCallback(async () => {
-    const detector = detectorRef.current;
-    const video = videoRef.current;
+    detectFrame();
+  }, [actions, currentTone, state.services]);
 
-    if (!detector || !video || video.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
+  // TODO [Basic] Fungsi untuk memulai dan menghentikan kamera
+  const handleToggleCamera = useCallback(async () => {
+    const { camera, detector } = state.services;
+
+    if (!camera || !detector?.isLoaded()) {
+      actions.setError('Model atau kamera belum siap.');
       return;
     }
 
-    setIsPredicting(true);
+    if (isRunningRef.current) {
+      isRunningRef.current = false;
+      window.clearTimeout(detectionCleanupRef.current);
+      camera.stopCamera();
+      actions.setRunning(false);
+      actions.resetResults();
+      return;
+    }
 
     try {
-      const result = await detector.predict(video);
-      setPrediction(result);
-
-      if (result.confidence >= CONFIDENCE_TRIGGER) {
-        requestFact(result.label);
-      }
+      await camera.startCamera();
+      isRunningRef.current = true;
+      lastDetectedLabelRef.current = '';
+      actions.setRunning(true);
+      actions.setAppState('analyzing');
+      startDetectionLoop();
     } catch (error) {
       console.error(error);
-      setModelStatus('Prediksi gagal dijalankan.');
-    } finally {
-      setIsPredicting(false);
+      actions.setError('Izin kamera ditolak atau kamera tidak tersedia.');
     }
-  }, [requestFact]);
+  }, [actions, startDetectionLoop, state.services]);
 
-  useEffect(() => {
-    window.clearInterval(frameTimerRef.current);
+  // TODO [Advance] Fungsi untuk mengubah nada fakta yang dihasilkan
+  const handleToneChange = useCallback((newTone) => {
+    setCurrentTone(newTone);
+    state.services.generator?.setTone(newTone);
+    lastDetectedLabelRef.current = '';
 
-    if (cameraStatus !== 'active' || !detectorRef.current) {
-      return undefined;
+    if (state.detectionResult && isValidDetection(state.detectionResult)) {
+      actions.setFunFactData(null);
     }
+  }, [actions, state.detectionResult, state.services.generator]);
 
-    const interval = Math.max(250, Math.round(1000 / fpsLimit));
-    frameTimerRef.current = window.setInterval(runPrediction, interval);
-
-    return () => window.clearInterval(frameTimerRef.current);
-  }, [cameraStatus, fpsLimit, runPrediction]);
-
-  useEffect(() => {
-    lastFactLabelRef.current = '';
-    if (prediction?.label && prediction.confidence >= CONFIDENCE_TRIGGER) {
-      requestFact(prediction.label);
+  // TODO [Skilled] Fungsi untuk menyalin fakta ke clipboard
+  const handleCopyFact = useCallback(async () => {
+    if (state.funFactData && state.funFactData !== 'error') {
+      await navigator.clipboard.writeText(state.funFactData);
     }
-  }, [persona, prediction, requestFact]);
-
-  const handleCopy = async () => {
-    if (!fact) return;
-
-    await navigator.clipboard.writeText(fact);
-    setCopyState('copied');
-    window.setTimeout(() => setCopyState('idle'), 1800);
-  };
-
-  const resetSession = () => {
-    setPrediction(null);
-    setFact('');
-    setFactStatus('Menunggu sayuran terdeteksi.');
-    lastFactLabelRef.current = '';
-  };
-
-  const isReady = modelProgress === 100 && cameraStatus === 'active';
+  }, [state.funFactData]);
 
   return (
-    <main className="app-shell">
-      <section className="topbar" aria-label="Root Fact App">
-        <div className="brand-mark">
-          <Leaf aria-hidden="true" />
-        </div>
-        <div>
-          <p className="eyebrow">Computer Vision + Generative AI</p>
-          <h1>Root Fact App</h1>
-        </div>
-        <div className="offline-badge">
-          <WifiOff aria-hidden="true" />
-          <span>PWA Ready</span>
-        </div>
-      </section>
+    <div className="app-container">
+      <Header modelStatus={state.modelStatus} />
 
-      <section className="workspace">
-        <CameraPanel
-          cameraError={cameraError}
-          cameraStatus={cameraStatus}
-          isPredicting={isPredicting}
-          isReady={isReady}
-          onStart={startCamera}
-          onStop={stopCamera}
-          videoRef={videoRef}
+      <main className="main-content">
+        <CameraSection
+          isRunning={state.isRunning}
+          onToggleCamera={handleToggleCamera}
+          onToneChange={handleToneChange}
+          services={state.services}
+          modelStatus={state.modelStatus}
+          error={state.error}
+          currentTone={currentTone}
         />
 
-        <aside className="side-rail">
-          <div className="status-strip">
-            <div className="status-line">
-              <LoaderCircle className={modelProgress < 100 ? 'spin' : ''} aria-hidden="true" />
-              <div>
-                <span>{modelStatus}</span>
-                <progress value={modelProgress} max="100" aria-label="Progress model" />
-              </div>
-            </div>
-            <div className="status-line">
-              <Gauge aria-hidden="true" />
-              <span>{backend}</span>
-            </div>
-          </div>
+        <InfoPanel
+          appState={state.appState}
+          detectionResult={state.detectionResult}
+          funFactData={state.funFactData}
+          error={state.error}
+          onCopyFact={handleCopyFact}
+        />
+      </main>
 
-          <div className="control-row">
-            <label htmlFor="fps-limit">FPS Limit</label>
-            <input
-              id="fps-limit"
-              max="10"
-              min="1"
-              onChange={(event) => setFpsLimit(Number(event.target.value))}
-              type="range"
-              value={fpsLimit}
-            />
-            <output>{fpsLimit} FPS</output>
-          </div>
+      <footer className="footer">
+        <p>Powered by TensorFlow.js & Transformers.js</p>
+      </footer>
 
-          <div className="control-row">
-            <label htmlFor="persona">Persona AI</label>
-            <select
-              id="persona"
-              onChange={(event) => setPersona(event.target.value)}
-              value={persona}
-            >
-              {PERSONAS.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <PredictionPanel prediction={prediction} />
-
-          <FactPanel
-            copyIcon={copyState === 'copied' ? Check : Clipboard}
-            fact={fact}
-            isGenerating={isGenerating}
-            onCopy={handleCopy}
-            status={factStatus}
-          />
-
-          <div className="actions">
-            <button className="ghost-button" onClick={resetSession} type="button">
-              <RotateCcw aria-hidden="true" />
-              <span>Reset</span>
-            </button>
-            <button
-              className="primary-button"
-              disabled={modelProgress < 100 || cameraStatus === 'active'}
-              onClick={startCamera}
-              type="button"
-            >
-              <Camera aria-hidden="true" />
-              <span>Buka Kamera</span>
-            </button>
-            <button
-              className="ghost-button"
-              disabled={!prediction?.label}
-              onClick={() => requestFact(prediction.label)}
-              type="button"
-            >
-              <Brain aria-hidden="true" />
-              <span>Fun Fact</span>
-            </button>
-          </div>
-
-          <p className="hint">
-            <Sparkles aria-hidden="true" />
-            Gunakan pencahayaan terang dan latar sederhana agar prediksi lebih stabil.
-          </p>
-        </aside>
-      </section>
-    </main>
+      {state.error && (
+        <div style={{
+          position: 'fixed',
+          bottom: '1rem',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          maxWidth: '380px',
+          padding: '0.875rem 1rem',
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 'var(--radius-md)',
+          color: '#991b1b',
+          fontSize: '0.8125rem',
+          boxShadow: 'var(--shadow-lg)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          zIndex: 1000
+        }}>
+          <strong>Error:</strong> {state.error}
+          <button
+            onClick={() => actions.setError(null)}
+            style={{
+              marginLeft: 'auto',
+              background: 'transparent',
+              border: 'none',
+              fontSize: '1.25rem',
+              cursor: 'pointer',
+              color: '#991b1b',
+              padding: 0,
+              lineHeight: 1
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
+
+export default App;

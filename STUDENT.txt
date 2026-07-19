@@ -1,7 +1,5 @@
 Nama: Rizal Mahardika Putra
 Email: rizalmahardi109@gmail.com
 Dicoding ID: RIzal Mahardika Putra
+APP_URL=https://roaring-brigadeiros-72544a.netlify.app/
 Deployment URL: https://roaring-brigadeiros-72544a.netlify.app/
-Catatan:
-- Proyek menggunakan jalur React untuk memenuhi kriteria Advanced.
-- Setelah deployment, pastikan URL Netlify produksi dicantumkan pada baris Deployment URL.

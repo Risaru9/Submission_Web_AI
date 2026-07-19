@@ -1,21 +1,13 @@
 import React from 'react';
-import { createRoot } from 'react-dom/client';
+import ReactDOM from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App.jsx';
-import './styles.css';
+import './index.css';
 
-registerSW({
-  immediate: true,
-  onNeedRefresh() {
-    console.info('Versi baru Root Fact App siap digunakan.');
-  },
-  onOfflineReady() {
-    console.info('Root Fact App siap berjalan offline.');
-  }
-});
+registerSW({ immediate: true });
 
-createRoot(document.getElementById('root')).render(
+ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <App />
-  </React.StrictMode>
+  </React.StrictMode>,
 );
