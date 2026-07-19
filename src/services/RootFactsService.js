@@ -1,7 +1,7 @@
 import { TONE_CONFIG } from '../utils/config.js';
 import { env, pipeline } from '@huggingface/transformers';
 
-const GENERATOR_MODEL = 'Xenova/distilgpt2';
+const GENERATOR_MODEL = 'Xenova/LaMini-Flan-T5-783M';
 
 env.useBrowserCache = true;
 env.allowLocalModels = false;
@@ -14,34 +14,76 @@ export class RootFactsService {
     this.config = null;
     this.currentBackend = null;
     this.currentTone = TONE_CONFIG.defaultTone;
+    this.loadPromise = null;
   }
 
   // TODO [Basic] Muat model dan inisialisasi pipeline text2text-generation
   // TODO [Advance] Implementasikan strategi Backend Adaptive
-  async loadModel() {
-    const preferredDevice = navigator.gpu ? 'webgpu' : 'wasm';
-
-    try {
-      this.generator = await pipeline('text-generation', GENERATOR_MODEL, {
-        dtype: 'q4',
-        device: preferredDevice,
-      });
-      this.currentBackend = preferredDevice === 'webgpu' ? 'WebGPU' : 'WASM';
-    } catch (error) {
-      if (preferredDevice !== 'webgpu') {
-        throw error;
-      }
-
-      console.warn('Transformers WebGPU gagal, fallback ke WASM.', error);
-      this.generator = await pipeline('text-generation', GENERATOR_MODEL, {
-        dtype: 'q4',
-        device: 'wasm',
-      });
-      this.currentBackend = 'WASM';
+  async loadModel(onProgress) {
+    if (this.loadPromise) {
+      return this.loadPromise;
     }
 
-    this.isModelLoaded = true;
-    return this;
+    const preferredDevice = navigator.gpu ? 'webgpu' : 'wasm';
+
+    this.loadPromise = (async () => {
+      onProgress?.('Memuat Generative AI... 0%');
+
+      try {
+        this.generator = await pipeline('text2text-generation', GENERATOR_MODEL, {
+          dtype: 'q4',
+          device: preferredDevice,
+          progress_callback: (progress) => {
+            const percent = progress?.progress
+              ? Math.round(progress.progress)
+              : null;
+            const status = percent
+              ? `Memuat Generative AI... ${percent}%`
+              : `Memuat Generative AI... ${progress?.status || 'menyiapkan model'}`;
+
+            onProgress?.(status);
+          },
+        });
+        this.currentBackend = preferredDevice === 'webgpu' ? 'WebGPU' : 'WASM';
+      } catch (error) {
+        if (preferredDevice !== 'webgpu') {
+          this.loadPromise = null;
+          throw error;
+        }
+
+        console.warn('Transformers WebGPU gagal, fallback ke WASM.', error);
+        onProgress?.('Memuat Generative AI... fallback WASM');
+        this.generator = await pipeline('text2text-generation', GENERATOR_MODEL, {
+          dtype: 'q4',
+          device: 'wasm',
+          progress_callback: (progress) => {
+            const percent = progress?.progress
+              ? Math.round(progress.progress)
+              : null;
+            const status = percent
+              ? `Memuat Generative AI... ${percent}%`
+              : `Memuat Generative AI... ${progress?.status || 'menyiapkan model'}`;
+
+            onProgress?.(status);
+          },
+        });
+        this.currentBackend = 'WASM';
+      }
+
+      this.isModelLoaded = true;
+
+      // WARM UP
+      try {
+        await this.generator('warmup', { max_new_tokens: 1 });
+      } catch (e) {
+        console.warn('Warmup failed', e);
+      }
+
+      onProgress?.(`Generative AI siap (${this.currentBackend})`);
+      return this;
+    })();
+
+    return this.loadPromise;
   }
 
   // TODO [Advance] Konfigurasi tone fakta yang dihasilkan
@@ -58,8 +100,12 @@ export class RootFactsService {
       throw new Error('Nama sayuran kosong');
     }
 
-    if (!this.isReady() || this.isGenerating) {
-      return this.createFallbackFact(vegetableName);
+    if (!this.isReady()) {
+      await this.loadModel();
+    }
+
+    if (this.isGenerating) {
+      throw new Error('Generative AI sedang memproses permintaan sebelumnya');
     }
 
     this.isGenerating = true;
@@ -83,12 +129,13 @@ export class RootFactsService {
         repetition_penalty: 1.12,
       });
       const rawText = Array.isArray(output) ? output[0]?.generated_text : output?.generated_text;
-      const text = String(rawText || '').replace(prompt, '').trim();
-      const sentence = text.split(/\n|(?<=\.)\s/).find(Boolean)?.trim();
+      const text = String(rawText || '').trim();
 
-      return sentence && sentence.length > 24
-        ? sentence.slice(0, 320)
-        : this.createFallbackFact(vegetableName);
+      if (!text || text.length < 5) {
+        throw new Error('Output Generative AI tidak valid');
+      }
+
+      return text.slice(0, 320);
     } finally {
       this.isGenerating = false;
     }
@@ -99,7 +146,4 @@ export class RootFactsService {
     return Boolean(this.generator && this.isModelLoaded);
   }
 
-  createFallbackFact(vegetableName) {
-    return `${vegetableName} punya fakta menarik: sayuran ini sering dipakai di dapur karena warna, tekstur, dan rasanya mudah berpadu dengan banyak masakan.`;
-  }
 }

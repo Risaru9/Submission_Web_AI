@@ -26,24 +26,30 @@ function App() {
       const generator = new RootFactsService();
 
       try {
+        actions.setModelStatus('Menunggu Model Deteksi... 0%');
+
+        await detector.loadModel((_percent, status) => {
+          if (isMounted) actions.setModelStatus(status);
+        });
+
+        if (!isMounted) return;
+
+        actions.setModelStatus('Model deteksi siap. Memuat Generative AI...');
+
         await Promise.all([
-          detector.loadModel((_percent, status) => {
+          camera.loadCameras(),
+          generator.loadModel((status) => {
             if (isMounted) actions.setModelStatus(status);
           }),
-          camera.loadCameras(),
         ]);
 
         if (!isMounted) return;
 
         actions.setServices({ detector, camera, generator });
         actions.setModelStatus('Model AI Siap');
-
-        generator.loadModel().catch((error) => {
-          console.warn('Generator fakta belum siap, fallback akan digunakan.', error);
-        });
       } catch (error) {
         console.error(error);
-        actions.setError('Gagal memuat model atau kamera. Periksa izin browser dan koneksi.');
+        actions.setError('Gagal memuat model AI. Pastikan koneksi tersedia saat pemuatan awal.');
         actions.setModelStatus('Model AI Gagal');
       }
     }
@@ -118,8 +124,8 @@ function App() {
   const handleToggleCamera = useCallback(async () => {
     const { camera, detector } = state.services;
 
-    if (!camera || !detector?.isLoaded()) {
-      actions.setError('Model atau kamera belum siap.');
+    if (!camera || !detector?.isLoaded() || !state.services.generator?.isReady()) {
+      actions.setError('Model deteksi dan Generative AI belum siap.');
       return;
     }
 

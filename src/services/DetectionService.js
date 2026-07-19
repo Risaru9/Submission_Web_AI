@@ -52,7 +52,15 @@ export class DetectionService {
     this.model = model;
     this.labels = metadata.labels;
     this.config.imageSize = metadata.imageSize || 224;
-    onProgress?.(100, 'Model AI Siap');
+
+    // TODO: WARM UP THE MODEL
+    const dummyInput = tf.zeros([1, this.config.imageSize, this.config.imageSize, 3]);
+    const warmupResult = this.model.predict(dummyInput);
+    await warmupResult.data();
+    warmupResult.dispose();
+    dummyInput.dispose();
+
+    onProgress?.(100, 'Model deteksi siap. Memuat Generative AI...');
     return this;
   }
 

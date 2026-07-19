@@ -1,5 +1,5 @@
 Nama: Rizal Mahardika Putra
 Email: rizalmahardi109@gmail.com
 Dicoding ID: RIzal Mahardika Putra
-APP_URL=https://roaring-brigadeiros-72544a.netlify.app/
-Deployment URL: https://roaring-brigadeiros-72544a.netlify.app/
+APP_URL= https://euphonious-alfajores-c03a2f.netlify.app/
+Deployment URL: https://euphonious-alfajores-c03a2f.netlify.app/
