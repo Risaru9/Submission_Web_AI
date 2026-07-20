@@ -1,7 +1,7 @@
 import { TONE_CONFIG } from '../utils/config.js';
 import { env, pipeline } from '@huggingface/transformers';
 
-const GENERATOR_MODEL = 'Xenova/LaMini-Flan-T5-783M';
+const GENERATOR_MODEL = 'Xenova/LaMini-Flan-T5-77M';
 
 env.useBrowserCache = true;
 env.allowLocalModels = false;
