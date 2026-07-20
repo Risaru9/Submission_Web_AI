@@ -94,6 +94,11 @@ function App() {
             isGeneratingFactRef.current = true;
             actions.setFunFactData(null);
 
+            // Matikan kamera secara otomatis setelah deteksi berhasil sesuai permintaan reviewer
+            isRunningRef.current = false;
+            camera.stopCamera();
+            actions.setRunning(false);
+
             try {
               generator?.setTone(currentTone);
               const fact = await generator?.generateFacts(result.className);
