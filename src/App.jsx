@@ -68,50 +68,63 @@ function App() {
     state.services.detector?.dispose();
   }, [state.services.camera, state.services.detector]);
 
-  const handleCapture = useCallback(async () => {
+  const startDetectionLoop = useCallback(() => {
     const { camera, detector, generator } = state.services;
 
-    if (!camera?.isActive() || !detector?.isLoaded()) {
-      actions.setError('Kamera belum aktif atau model belum siap.');
-      return;
-    }
-
-    actions.setAppState('analyzing');
-
-    try {
-      const frame = camera.getFrame ? camera.getFrame() : camera.video;
-      const result = await detector.predict(frame);
-      actions.setDetectionResult(result);
-
-      if (isValidDetection(result)) {
-        const detectionKey = `${result.className}-${currentTone}`;
-        actions.setAppState('result');
-        lastDetectedLabelRef.current = detectionKey;
-        actions.setFunFactData(null);
-
-        // Matikan kamera secara otomatis setelah deteksi berhasil
-        isRunningRef.current = false;
-        camera.stopCamera();
-        actions.setRunning(false);
-
-        try {
-          generator?.setTone(currentTone);
-          const fact = await generator?.generateFacts(result.className);
-          actions.setFunFactData(fact);
-        } catch (error) {
-          console.error(error);
-          actions.setFunFactData('error');
-        }
-      } else {
-        // Jika deteksi tidak valid (kurang yakin)
-        actions.setError('Tidak yakin ini sayuran apa. Silakan coba lagi.');
-        actions.setAppState('idle');
+    const detectFrame = async () => {
+      if (!isRunningRef.current || !camera?.isReady() || !detector?.isLoaded()) {
+        detectionCleanupRef.current = window.setTimeout(detectFrame, APP_CONFIG.detectionRetryInterval);
+        return;
       }
-    } catch (error) {
-      console.error(error);
-      actions.setError('Prediksi gagal dijalankan.');
-      actions.setAppState('idle');
-    }
+
+      actions.setAppState('analyzing');
+
+      try {
+        const frame = camera.getFrame ? camera.getFrame() : camera.video;
+        const result = await detector.predict(frame);
+        actions.setDetectionResult(result);
+
+        if (isValidDetection(result) && !isGeneratingFactRef.current) {
+          const detectionKey = `${result.className}-${currentTone}`;
+          
+          if (lastDetectedLabelRef.current !== detectionKey) {
+            lastDetectedLabelRef.current = detectionKey;
+            isGeneratingFactRef.current = true;
+            actions.setAppState('result');
+            actions.setFunFactData(null);
+
+            // Sesuai saran reviewer: Matikan interval/loop deteksi dan hentikan kamera
+            isRunningRef.current = false;
+            window.clearTimeout(detectionCleanupRef.current);
+            camera.stopCamera();
+            actions.setRunning(false);
+
+            try {
+              generator?.setTone(currentTone);
+              const fact = await generator?.generateFacts(result.className);
+              actions.setFunFactData(fact);
+            } catch (error) {
+              console.error(error);
+              actions.setFunFactData('error');
+            } finally {
+              isGeneratingFactRef.current = false;
+            }
+          }
+          return; // Berhenti melanjutkan loop karena sudah berhasil dideteksi
+        }
+      } catch (error) {
+        console.error(error);
+        actions.setError('Prediksi gagal dijalankan.');
+      } finally {
+        if (isRunningRef.current) {
+          const fps = camera?.config?.fps || APP_CONFIG.fpsLimit;
+          const delay = Math.max(250, Math.round(1000 / fps));
+          detectionCleanupRef.current = window.setTimeout(detectFrame, delay);
+        }
+      }
+    };
+
+    detectFrame();
   }, [actions, currentTone, state.services]);
 
   // TODO [Basic] Fungsi untuk memulai dan menghentikan kamera
@@ -125,6 +138,7 @@ function App() {
 
     if (isRunningRef.current) {
       isRunningRef.current = false;
+      window.clearTimeout(detectionCleanupRef.current);
       camera.stopCamera();
       actions.setRunning(false);
       actions.resetResults();
@@ -136,12 +150,13 @@ function App() {
       isRunningRef.current = true;
       lastDetectedLabelRef.current = '';
       actions.setRunning(true);
-      actions.setAppState('idle');
+      actions.setAppState('analyzing');
+      startDetectionLoop();
     } catch (error) {
       console.error(error);
       actions.setError('Izin kamera ditolak atau kamera tidak tersedia.');
     }
-  }, [actions, state.services]);
+  }, [actions, startDetectionLoop, state.services]);
 
   // TODO [Advance] Fungsi untuk mengubah nada fakta yang dihasilkan
   const handleToneChange = useCallback((newTone) => {
@@ -168,9 +183,7 @@ function App() {
       <main className="main-content">
         <CameraSection
           isRunning={state.isRunning}
-          appState={state.appState}
           onToggleCamera={handleToggleCamera}
-          onCapture={handleCapture}
           onToneChange={handleToneChange}
           services={state.services}
           modelStatus={state.modelStatus}

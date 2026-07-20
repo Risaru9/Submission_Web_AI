@@ -4,9 +4,7 @@ import { APP_CONFIG, TONE_CONFIG } from '../utils/config';
 
 function CameraSection({
   isRunning,
-  appState,
   onToggleCamera,
-  onCapture,
   onToneChange,
   services,
   modelStatus,
@@ -31,9 +29,9 @@ function CameraSection({
 
   useEffect(() => {
     if (services.camera) {
-      services.camera.setFPS(3); // Tetap set FPS default jika dibutuhkan oleh CameraService
+      services.camera.setFPS(fps);
     }
-  }, [services.camera]);
+  }, [fps, services.camera]);
 
   const handleCameraChange = (newCameraType) => {
     setCameraType(newCameraType);
@@ -41,6 +39,10 @@ function CameraSection({
       services.camera.config.facingMode = newCameraType === 'front' ? 'user' : 'environment';
       services.camera.startCamera();
     }
+  };
+
+  const handleFpsChange = (newFps) => {
+    setFps(Number(newFps));
   };
 
 
@@ -52,23 +54,8 @@ function CameraSection({
   };
 
   const isModelReady = modelStatus === 'Model AI Siap';
-  const buttonDisabled = !isModelReady || appState === 'analyzing';
-
-  let buttonAction = onToggleCamera;
-  let IconComponent = Camera;
-  let btnClass = 'capture-btn';
-  let ariaLabel = 'Mulai Kamera';
-
-  if (appState === 'result') {
-    buttonAction = onToggleCamera;
-    IconComponent = Camera;
-    ariaLabel = 'Ulangi Kamera';
-  } else if (isRunning) {
-    buttonAction = onCapture;
-    IconComponent = ScanLine;
-    btnClass = 'capture-btn scanning';
-    ariaLabel = 'Tangkap Gambar';
-  }
+  const buttonDisabled = !isModelReady;
+  const buttonText = isRunning ? 'Stop Scan' : 'Mulai Scan';
 
   return (
     <section className="camera-section" aria-label="Camera Feed and Controls">
@@ -109,13 +96,13 @@ function CameraSection({
         <div className="camera-controls">
           <button
             id="btn-toggle"
-            className={btnClass}
-            onClick={buttonAction}
+            className={`capture-btn ${isRunning ? 'scanning' : ''}`}
+            onClick={onToggleCamera}
             disabled={buttonDisabled}
-            aria-label={ariaLabel}
+            aria-label={buttonText}
             style={{ opacity: buttonDisabled ? 0.6 : 1 }}
           >
-            <IconComponent size={24} />
+            <ScanLine size={24} />
           </button>
         </div>
 
@@ -133,6 +120,20 @@ function CameraSection({
             </select>
           </div>
 
+
+          <div className="setting-item fps-setting">
+            <span id="fps-label">{fps} FPS</span>
+            <input
+              id="fps-slider"
+              type="range"
+              min="1"
+              max="10"
+              step="1"
+              value={fps}
+              onChange={(e) => handleFpsChange(e.target.value)}
+              disabled={isRunning}
+            />
+          </div>
 
           <div className="setting-item tone-setting">
             <Mic size={16} />
