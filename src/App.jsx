@@ -81,7 +81,8 @@ function App() {
       actions.setAppState('analyzing');
 
       try {
-        const result = await detector.predict(camera.video);
+        const frame = camera.getFrame ? camera.getFrame() : camera.video;
+        const result = await detector.predict(frame);
         actions.setDetectionResult(result);
 
         if (isValidDetection(result) && !isGeneratingFactRef.current) {

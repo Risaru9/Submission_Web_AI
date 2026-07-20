@@ -79,4 +79,18 @@ export class CameraService {
   isReady() {
     return Boolean(this.video && this.video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA);
   }
+
+  // Draw frame to canvas to prevent video texture glitch during tf.browser.fromPixels
+  getFrame() {
+    if (this.video && this.canvas && this.isReady()) {
+      const ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+      if (this.canvas.width !== this.video.videoWidth) {
+        this.canvas.width = this.video.videoWidth;
+        this.canvas.height = this.video.videoHeight;
+      }
+      ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+      return this.canvas;
+    }
+    return this.video;
+  }
 }
